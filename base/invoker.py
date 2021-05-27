@@ -5,7 +5,7 @@ from typing import final
 
 from requests import session as RequestsSession, Request as RequestRequest
 from asyncio_throttle import Throttler
-import copy, logging
+import logging
 
 @dataclass
 class Request:
@@ -22,46 +22,34 @@ class Response:
     headers: dict
 
 class Invoker(metaclass=ABCMeta):
-    def __init__(self, host: str, protocol: str = 'http', port: int = 80):
-        self.__host = host
-        self.__protocol = protocol
-        self.__port = port
-
-    @final
-    def url(self) -> str:
-        return self.__protocol + '://' + self.__host + ':' + str(self.__port)
-
-    def invoke(self, request: Request) -> Response:
-        copyRequest = copy.deepcopy(request)
-        copyRequest.url = self.url()
-        return self.sendRequest(copyRequest)
-
+    """
+    A basic interface that defines what Invoker can do.
+    """
     @abstractmethod
-    def sendRequest(self, request: Request) -> Response:
+    def invoke(self, request: Request) -> Response:
         pass
+
+class LoggingInvokerAdapter(Invoker):
+    """
+    An InvokerAdaptor that print the reqest and reponse into log.
+    """
+    def __init__(self, invoker: Invoker, logger: logging.Logger):
+        self.__invoker = invoker
+        self.__logger = logger
     
+    @final
+    def invoke(self, request: Request) -> Response:
+        if self.__logger.isEnabledFor(logging.INFO):
+            self.__logger.info('Request: %s', request)
+        response = self.__invoker.invoke(request)
+        if self.__logger.isEnabledFor(logging.INFO):
+            self.__logger.info('Response: %s', response)  
+        return response  
 
-
-class SimpleInvoker(Invoker):
-    def __init__(self):
-        self.__session = RequestsSession()
-    def sendRequest(self, request: Request) -> Response:
-        __request = RequestRequest()
-        __request.method = request.method.strip().upper()
-        __request.params = request.params
-        __request.headers = request.headers
-        __request.url = request.url
-        __request.json = request.body
-        __response = self.__session.send(__request)
-        response = Response()
-        response.text = __response.text
-        response.headers = __response.headers
-        response.status_code = __response.status_code
-        return response
-
-# pip install asyncio-throttle
-# 實作控制每一段時間打出去的Request數量 (可參考: https://pypi.org/project/asyncio-throttle/，但需要搭配static variable)
 class ThrottledInvokerAdapter(Invoker):
+    """
+    An adapter that can control how many request could be sent in a period of time
+    """
     def __init__(self, invoker: Invoker, rate_limit: int, period: int):
         self.__invoker = invoker
         self.__throttler = Throttler(rate_limit=rate_limit, period=period) 
@@ -71,50 +59,22 @@ class ThrottledInvokerAdapter(Invoker):
         self.__throttler.acquire()
         result = self.__invoker.invoke(request)
         self.__throttler.flush()
-        return result
-
-class LoggingInvokerAdapter(Invoker):
-    def __init__(self, invoker: Invoker, logger: logging.Logger):
-        self.__invoker = invoker
-        self.__logger = logger
-    
-    @final
+        return result    
+class SimpleInvoker(Invoker):
+    """
+    A very simple invoker that use requests packge to send request
+    """
+    def __init__(self, session: RequestsSession = None):
+        if session is not None:
+            self.session = session
+        else:
+            self.session = RequestsSession()
     def invoke(self, request: Request) -> Response:
-        if self.__logger.level >= logging.DEBUG:
-            self.__logger.debug('Request: %s', request)
-        response = self.__invoker.invoke(request)
-        if self.__logger.level >= logging.DEBUG:
-            self.__logger.debug('Response: %s', response)  
-        return response      
-
-
-
-# 將翻頁邏輯寫在這裡
-class PagedInvokerAdapter(Invoker, metaclass=ABCMeta):
-    logger = logging.getLogger('PagedInvokerAdapter')
-
-    def __init__(self, invoker: Invoker):
-        self.__invoker = LoggingInvokerAdapter(invoker, PagedInvokerAdapter.logger)
-
-    @abstractmethod
-    def isEnd(self, request:Request, response: Response) -> bool:
-        pass
-
-    @abstractmethod
-    def nextRequest(self, request:Request, response: Response) -> Request:
-        pass
-
-    @abstractmethod
-    def foldResponses(self, responses: list[Response]) -> Response:
-        pass
-
-    @final
-    def invoke(self, request: Request) -> Response:
-        responses = []
-        __response = self.__invoker.invoke(request)
-        responses.append(__response)
-        while not self.isEnd(request, __response):
-            request = self.nextRequest(request, __response)
-            __response = self.__invoker.invoke(request)
-            responses.append(__response)
-        return self.foldResponses(responses)
+        __request = RequestRequest()
+        __request.method = request.method.strip().upper()
+        __request.params = request.params
+        __request.headers = request.headers
+        __request.url = request.url
+        __request.json = request.body
+        __response = self.session.send(__request.prepare())
+        return Response(__response.text, __response.status_code, __response.headers)
