@@ -1,13 +1,11 @@
-from asyncio_throttle import Throttler
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import time
-import requests as re
 import pandas as pd
 import json
+from .base.invoker import SimpleInvoker
 
-from abc import ABCMeta, abstractmethod
-from typing import final
+
 
 category_url = {
     'headline': 'https://api.cnyes.com/media/api/v1/newslist/category/headline?',
@@ -16,47 +14,10 @@ category_url = {
 }
 
 
-class Invoker(metaclass=ABCMeta):
-    def __init__(self, host: str, protocol: str = 'http', port: int = 80):
-        self.__host = host
-        self.__protocol = protocol
-        self.__port = port
-
-    def url(self) -> str:
-        return self.__protocol + '://' + self.__host + ':' + str(self.__port)
-
-    @abstractmethod
-    def invoke(self, path: str, method: str, queryParam=None, requestBody=None, header=None):
-        pass
-
-
-class SimpleInvoker(Invoker):
-    def invoke(self, path: str, method: str, queryParam=None, requestBody=None, header=None):
-        # TODO: 處理200以外的狀況
-        if strip(upper(method)) == 'GET':
-            return json.loads(re.get(self.url(), headers=header, params=queryParam).text)
-        elif strip(upper(method)) == 'POST':
-            return json.loads(re.post(self.url(), headers=header, params=queryParam, data=requestBody).text)
-        else:
-            # TODO: throw an exception indicates supported method
-            pass
-
-
-# pip install asyncio-throttle
-# 實作控制每一段時間打出去的Request數量 (可參考: https://pypi.org/project/asyncio-throttle/，但需要搭配static variable)
-class ThrottledInvoker(Invoker):
-    def __init__(self, invoker, rate_limit, period):
-        self.__invoker = invoker
-        self.__throttler = Throttler(rate_limit=500, period=60) 
-    def invoke(self, path: str, method: str, queryParam=None, requestBody=None, header=None):
-        self.__throttler.acquire()
-        result = self.__invoker.invoke(path, method, queryParam, requestBody, header)
-        self.__throttler.flush()
-        return result
 
 class BaseCNYESInvoker(SimpleInvoker):
     def __init__(self):
-        Invoker.__init__(self, 'api.cnyes.com', 'https', 443)
+        SimpleInvoker.__init__(self, 'api.cnyes.com', 'https', 443)
 
 # API 鉅亨網呼叫工具
 # 準備打鉅亨網API必要的Header與參數
@@ -117,17 +78,7 @@ class BaseInvoker:
                    params={'startAt': str(startstamp), 'endAt': str(endstamp), 'limit': '30', 'page': str(page)})
         return json.loads(r.text)
 
-# 將翻頁邏輯寫在這裡
 
-
-class PagedInvoker(BaseInvoker):
-    pass
-    # dataframe = pd.DataFrame(columns=['時間戳記', '標題'])
-    # for data in page_request['items']['data']:
-                    # newdata = {'時間戳記': data['publishAt'], '標題': data['title']}
-                    # dataframe = dataframe.append(newdata, ignore_index=True)
-
-    # return dataframe
 
 # 準備特定的參數API，分析下行資料並轉成High Level物件（如 DataFrame)
 
