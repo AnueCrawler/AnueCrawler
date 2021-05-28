@@ -1,13 +1,117 @@
-from asyncio_throttle import Throttler
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-import time
-import requests as re
+from abc import abstractmethod
+from typing import Any, List, final
+from base.api_client import ApiClient, BaseApiClient, BaseApiClientRequest, BaseApiClientResponse, InvokerRq, InvokerRs
+from base.invoker import Invoker, LoggingInvokerAdapter, Request, Response, SimpleInvoker
+from datetime import datetime, time, timedelta
 import pandas as pd
-import json
+import json, copy
+import logging
+import logging.config
+import yaml
+from dataclasses import dataclass
+import datetime
 
-from abc import ABCMeta, abstractmethod
-from typing import final
+
+@dataclass
+class HeadlineRequest(BaseApiClientRequest):
+    startAt: datetime.datetime
+    endAt: datetime.datetime
+    limit: int
+    page: int
+
+    def generateRequest(self) -> Request:
+        request = Request(None, None, None, None, None)
+        request.params = {
+            'startAt': str(int(self.startAt.timestamp())),
+            'endAt': str(int(self.endAt.timestamp())), 'limit': str(self.limit), 'page': str(self.page)
+        }
+        return request
+
+
+@dataclass
+class HeadlineResponse(BaseApiClientResponse):
+    data: Any
+
+    def fit(self, response: Response) -> Request:
+        self.data = json.loads(response.text)
+
+class PagedApiClient(ApiClient[InvokerRq, InvokerRs]):
+    logger = logging.getLogger('PagedApiClient')
+    def __init__(self, client: ApiClient[InvokerRq, InvokerRs]):
+        self.__client = client
+        self.__responses: List[InvokerRs] = []
+        
+    @final
+    def sendAndReceive(self, rq: InvokerRq) -> InvokerRs:
+        self.originRequest = copy.deepcopy(rq)
+        rs: InvokerRs = None
+        while True:
+            rq = self.newRequest(rq, rs)
+            logger.info(rq)
+            rs = self.__client.sendAndReceive(rq)
+            self.__responses.append(rs)
+            if self.isEnd(rq, rs):
+                break
+        return self.aggregrateResponse(self.__responses)
+
+
+    @abstractmethod
+    def isEnd(self, rq: InvokerRq, rs: InvokerRs) -> bool:
+        pass
+    @abstractmethod
+    def newRequest(self, rq: InvokerRq, rs: InvokerRs) -> InvokerRq:
+        pass
+    @abstractmethod
+    def aggregrateResponse(self, responses: List[InvokerRs]) -> InvokerRs:
+        pass
+
+class HeadlineApiClient(BaseApiClient[HeadlineRequest, HeadlineResponse]):
+    def __init__(self, invoker: Invoker):
+        BaseApiClient.__init__(
+            self, invoker, 'https://api.cnyes.com/media/api/v1/newslist/category/headline', 'GET')
+
+    def prepareRequest(self, rq: HeadlineRequest) -> Request:
+        return rq.generateRequest()
+
+    def parseResponse(self, response: Response) -> HeadlineResponse:
+        result = HeadlineResponse(None)
+        result.fit(response)
+        return result
+
+class PagedHeadlineApiClient(PagedApiClient[HeadlineRequest, HeadlineResponse]):
+    def __init__(self, client: HeadlineApiClient):
+        PagedApiClient.__init__(self, client)
+
+    def isEnd(self, rq: HeadlineRequest, rs: HeadlineResponse) -> bool:
+        return rq.endAt >= self.__targetDate
+
+
+    def newRequest(self, rq: HeadlineRequest, rs: HeadlineResponse) -> HeadlineRequest:
+        newRequest = HeadlineRequest(rq.startAt, rq.startAt + timedelta(days=rq.limit), rq.limit, rq.page)
+        if (rs is None):
+            self.__targetDate = rq.endAt
+            if (newRequest.endAt > self.__targetDate):
+                newRequest.endAt = self.__targetDate
+            self.__previousEndAt = newRequest.endAt
+            return newRequest
+        else:
+            __last_page = int(rs.data['items']['last_page'])
+            __current_page = int(rs.data['items']['current_page'])
+            if newRequest.page < __last_page:
+                newRequest.page = __current_page + 1
+            else:
+                newRequest.page = 1
+                newRequest.startAt = self.__previousEndAt + timedelta(days = 1)
+                newRequest.endAt = newRequest.startAt + timedelta(days = rq.limit)
+                if (newRequest.endAt > self.__targetDate):
+                    newRequest.endAt = self.__targetDate
+                self.__previousEndAt = newRequest.endAt
+            return newRequest
+
+    def aggregrateResponse(self, responses: List[HeadlineResponse]) -> HeadlineResponse:
+        newResponse = HeadlineResponse(None)
+        newResponse.data = [item for list in list(map(lambda resp: resp.data['items']['data'], responses)) for item in list]
+        return newResponse
 
 category_url = {
     'headline': 'https://api.cnyes.com/media/api/v1/newslist/category/headline?',
@@ -15,53 +119,12 @@ category_url = {
                 '美股': '美股api網址'
 }
 
-
-class Invoker(metaclass=ABCMeta):
-    def __init__(self, host: str, protocol: str = 'http', port: int = 80):
-        self.__host = host
-        self.__protocol = protocol
-        self.__port = port
-
-    def url(self) -> str:
-        return self.__protocol + '://' + self.__host + ':' + str(self.__port)
-
-    @abstractmethod
-    def invoke(self, path: str, method: str, queryParam=None, requestBody=None, header=None):
-        pass
-
-
-class SimpleInvoker(Invoker):
-    def invoke(self, path: str, method: str, queryParam=None, requestBody=None, header=None):
-        # TODO: 處理200以外的狀況
-        if strip(upper(method)) == 'GET':
-            return json.loads(re.get(self.url(), headers=header, params=queryParam).text)
-        elif strip(upper(method)) == 'POST':
-            return json.loads(re.post(self.url(), headers=header, params=queryParam, data=requestBody).text)
-        else:
-            # TODO: throw an exception indicates supported method
-            pass
-
-
-# pip install asyncio-throttle
-# 實作控制每一段時間打出去的Request數量 (可參考: https://pypi.org/project/asyncio-throttle/，但需要搭配static variable)
-class ThrottledInvoker(Invoker):
-    def __init__(self, invoker, rate_limit, period):
-        self.__invoker = invoker
-        self.__throttler = Throttler(rate_limit=500, period=60) 
-    def invoke(self, path: str, method: str, queryParam=None, requestBody=None, header=None):
-        self.__throttler.acquire()
-        result = self.__invoker.invoke(path, method, queryParam, requestBody, header)
-        self.__throttler.flush()
-        return result
-
-class BaseCNYESInvoker(SimpleInvoker):
-    def __init__(self):
-        Invoker.__init__(self, 'api.cnyes.com', 'https', 443)
-
 # API 鉅亨網呼叫工具
 # 準備打鉅亨網API必要的Header與參數
-# 
+#
 # 將收到的資料轉成Python標準物件(List, Dictionary等)
+
+
 class BaseInvoker:
     # TODO: 先不要轉成DataFrame，而是Python原生的物件
     # TODO: 先不要在這裡指定API所需要的參數，跟API相關的邏輯可以搬移到ApiCrawler，或是更下層的子類別
@@ -95,7 +158,8 @@ class BaseInvoker:
                 page_request = self._request(
                     url, __startstamp, __endstamp, page=p)
                 for data in page_request['items']['data']:
-                    newdata = {'timestamp': data['publishAt'], 'title': data['title'], 'stocks': data['market']}
+                    newdata = {
+                        'timestamp': data['publishAt'], 'title': data['title'], 'stocks': data['market']}
                     DataList.append(newdata)
 
             if (__targetdate < __enddate):
@@ -117,17 +181,6 @@ class BaseInvoker:
                    params={'startAt': str(startstamp), 'endAt': str(endstamp), 'limit': '30', 'page': str(page)})
         return json.loads(r.text)
 
-# 將翻頁邏輯寫在這裡
-
-
-class PagedInvoker(BaseInvoker):
-    pass
-    # dataframe = pd.DataFrame(columns=['時間戳記', '標題'])
-    # for data in page_request['items']['data']:
-                    # newdata = {'時間戳記': data['publishAt'], '標題': data['title']}
-                    # dataframe = dataframe.append(newdata, ignore_index=True)
-
-    # return dataframe
 
 # 準備特定的參數API，分析下行資料並轉成High Level物件（如 DataFrame)
 
@@ -135,12 +188,12 @@ class PagedInvoker(BaseInvoker):
 class ApiCrawler:
     def __init__(self, url: str, startdate: str, enddate: str):
         self.__invoker = BaseInvoker()
-        self.__url = url
+        self.url = url
         self.__startdate = startdate
         self.__enddate = enddate
 
     def execute(self) -> pd.DataFrame:
-        return self.__invoker.execute(self.__url, self.__startdate, self.__enddate)
+        return self.__invoker.execute(self.url, self.__startdate, self.__enddate)
 
     def to_csv(self):
         self.execute().to_csv()
@@ -154,11 +207,24 @@ def twstock(startdate: str, enddate: str, stockID=""):
     if stockID == "":
         return ApiCrawler(category_url['twstock'], startdate, enddate).execute()
     else:
-        AllData = ApiCrawler(category_url['twstock'], startdate, enddate).execute()
-        TargetLsit=[]
+        AllData = ApiCrawler(
+            category_url['twstock'], startdate, enddate).execute()
+        TargetLsit = []
         for data in AllData:
             for stock in data['stocks']:
                 if stock['code'] == stockID:
-                    TargetLsit.append[{'timestamp': data['timestamp'], 'title': data['title']}]
-        
+                    TargetLsit.append[{
+                        'timestamp': data['timestamp'], 'title': data['title']}]
+
         return TargetLsit
+
+
+if __name__ == '__main__':
+    config = yaml.SafeLoader(open('config/logging.yaml', 'r')).get_data()
+    logging.config.dictConfig(config)
+    logger = logging.getLogger()
+    invoker = PagedHeadlineApiClient(HeadlineApiClient(LoggingInvokerAdapter(
+        SimpleInvoker(), logger)))
+    request = HeadlineRequest(datetime.datetime(year=2021, month=5, day=1), datetime.datetime(year=2021, month=6, day=30), 30, 1)
+    data = invoker.sendAndReceive(request).data
+    logger.info(data)
