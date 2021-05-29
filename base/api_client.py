@@ -1,6 +1,6 @@
 
 from abc import ABCMeta, abstractmethod
-from crawler.blueprint.invoker import Invoker, Request, Response
+from base.invoker import Invoker, Request, Response
 from typing import Generic, List, TypeVar, Union, final
 import logging, copy
 

@@ -1,10 +1,8 @@
 from abc import ABCMeta, abstractmethod
 import copy
 from dataclasses import dataclass
-from urllib.error import HTTPError
-from crawler.blueprint.invoker import Request, Response
-import json
-from crawler.blueprint.api_client import ApiClient, BaseApiClientRequest, BaseApiClientResponse, PagedApiClient
+from base.invoker import Request
+from base.api_client import ApiClient, BaseApiClientRequest, BaseApiClientResponse, PagedApiClient
 from typing import Generic, List, TypeVar
 
 DataVo = TypeVar('DataVo')
