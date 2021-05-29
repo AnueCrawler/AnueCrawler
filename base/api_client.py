@@ -1,13 +1,11 @@
 
 from abc import ABCMeta, abstractmethod
 from base.invoker import Invoker, Request, Response
-from typing import Generic, TypeVar, final
-
+from typing import Generic, List, TypeVar, Union, final
+import logging, copy
 
 Rq = TypeVar('Rq')
 Rs = TypeVar('Rs')
-
-
 class ApiClient(Generic[Rq, Rs], metaclass=ABCMeta):
     def __init__(self, url: str, method: str = 'GET'):
         self.url = url
@@ -25,15 +23,11 @@ class BaseApiClientRequest(metaclass=ABCMeta):
 
 
 class BaseApiClientResponse(metaclass=ABCMeta):
-    @abstractmethod
-    def fit(self, response: Response):
-        pass
+    pass
 
 
 InvokerRq = TypeVar('InvokerRq')
 InvokerRs = TypeVar('InvokerRs')
-
-
 class BaseApiClient(ApiClient[InvokerRq, InvokerRs]):
     def __init__(self, invoker: Invoker, url: str, method: str = 'GET'):
         self.__invoker = invoker
@@ -51,5 +45,36 @@ class BaseApiClient(ApiClient[InvokerRq, InvokerRs]):
         pass
 
     @abstractmethod
-    def parseResponse(self, response: Response) -> Rs:
+    def parseResponse(self, response: Response) -> InvokerRs:
+        pass
+
+
+class PagedApiClient(ApiClient[InvokerRq, InvokerRs]):
+    logger = logging.getLogger('PagedApiClient')
+    def __init__(self, client: ApiClient[InvokerRq, InvokerRs]):
+        self.__client = client
+        self.__responses: List[InvokerRs] = []
+        
+    @final
+    def sendAndReceive(self, rq: InvokerRq) -> InvokerRs:
+        self.originRequest = copy.deepcopy(rq)
+        rs: Union[InvokerRs, None] = None
+        while True:
+            rq = self.newRequest(rq, rs)
+            PagedApiClient.logger.debug(rq)
+            rs = self.__client.sendAndReceive(rq)
+            self.__responses.append(rs)
+            if self.isEnd(rq, rs):
+                break
+        return self.aggregrateResponse(self.__responses)
+
+
+    @abstractmethod
+    def isEnd(self, rq: InvokerRq, rs: InvokerRs) -> bool:
+        pass
+    @abstractmethod
+    def newRequest(self, rq: InvokerRq, rs: InvokerRs) -> InvokerRq:
+        pass
+    @abstractmethod
+    def aggregrateResponse(self, responses: List[InvokerRs]) -> InvokerRs:
         pass
