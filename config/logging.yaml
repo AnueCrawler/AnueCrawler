@@ -11,7 +11,7 @@ root: #默認情況下配置
 handlers:
   console:
     class: logging.StreamHandler
-    level: INFO
+    level: DEBUG
     formatter: simple
     stream: ext://sys.stdout
   info_file_handler:
