@@ -54,15 +54,16 @@ def _mulitPages(rq: request, rs: response) -> list:
                 for news in json_data['data']:
                     logging.debug('NewsID:{ID} publish at {publicAt}'.format(ID=(news['newsId']), publicAt=(news['publishAt'])))
                     datalist.append(news)
-                else:
-                    if lastpage != 0:
-                        rq.params['page'] = str(int(rq.params['page']) + 1)
-                    else:
-                        rq.params['page'] = 0
-                    if currentpage >= lastpage:
-                        pass
 
-            rs = _singlepage(rq)
+                if lastpage != 0:
+                    rq.params['page'] = str(int(rq.params['page']) + 1)
+            else:
+                rq.params['page'] = 0
+
+        if currentpage >= lastpage:
+            break
+
+        rs = _singlepage(rq)
 
     return datalist
 
@@ -128,23 +129,29 @@ class News_API(list):
         targetdate = startdate
         all_data_list = []
         while True:
-            while True:
-                if self._enddate_str != None:
-                    targetdate = startdate + targetdelta(targetdate, enddate)
-                    targetdate = datetime.combine(targetdate, time(23, 59, 59))
-                else:
-                    targetdate = datetime.combine(today, time(23, 59, 59))
-                startstamp = str(int(startdate.timestamp()))
-                tartgetstamp = str(int(targetdate.timestamp()))
-                params = {'limit':'30',  'startAt':startstamp,  'endAt':tartgetstamp,  'page':'1'}
-                rq = request(self._url, 'GET', default_headers, params)
-                rs = _singlepage(rq)
-                all_data_list = all_data_list + _mulitPages(rq, rs)
-                if targetdate.day >= enddate.day:
-                    pass
+            if self._enddate_str != None:
+                targetdate = startdate + targetdelta(targetdate, enddate)
+                targetdate = datetime.combine(targetdate, time(23, 59, 59))
+            else:
+                targetdate = datetime.combine(today, time(23, 59, 59))
+            startstamp = str(int(startdate.timestamp()))
+            tartgetstamp = str(int(targetdate.timestamp()))
+            params = {'limit':'30',  'startAt':startstamp,  'endAt':tartgetstamp,  'page':'1'}
+            rq = request(self._url, 'GET', default_headers, params)
+            rs = _singlepage(rq)
+            all_data_list = all_data_list + _mulitPages(rq, rs)
 
-            startdate = targetdate + timedelta(days=1)
-            startdate = startdate.replace(hour=0, minute=0, second=0)
+            if targetdate >= enddate:
+                break
+            else:
+                startdate = targetdate + timedelta(days=1)
+                startdate = startdate.replace(hour=0, minute=0, second=0)
 
         self._datalist = all_data_list
         return self
+
+
+
+if __name__ == '__main__' :
+    test = News_API('headline')
+    print(test.browse('2021-6-1').data_list())
