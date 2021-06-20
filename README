@@ -1,11 +1,14 @@
 # AnueCrawler
 基於Python語言的[鉅亨網](https://www.cnyes.com)爬蟲程式
-
+### 安裝
+``` Shell
+pip install AnueCrawler
+```
 
 ### 使用教學
 ``` python
 #載入模組
-from AnueCrawler.News import headline, twstock, wdstock, blockchain 
+from anuecrawler.news import headline, twstock, wdstock, blockchain 
 ```
 
 API名稱      |說明
