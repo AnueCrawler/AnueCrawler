@@ -20,7 +20,7 @@ setup(
     version = '1.0.2',
     description = 'Crawler for CNYes ',
     long_description_content_type='text/markdown',
-    long_description=read_file('README'),
+    long_description=read_file('README.md'),
     author = 'LanDeveloper',
     author_email = 'nilm987521@gmail.com',
     url = 'https://github.com/LanDeveloper/AnueCrawler',
